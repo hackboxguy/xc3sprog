@@ -16,7 +16,11 @@
 if (NOT LIBFTDI_FOUND)
 
     if(NOT WIN32)
+        # Temporarily suppress developer warnings for PkgConfig
+        set(_saved_warn_dev ${CMAKE_WARN_DEVELOPER})
+        set(CMAKE_WARN_DEVELOPER OFF)
         include(FindPkgConfig)
+        set(CMAKE_WARN_DEVELOPER ${_saved_warn_dev})
         pkg_check_modules(LIBFTDI_PKG libftdi)
     endif(NOT WIN32)
 
@@ -52,7 +56,7 @@ if (NOT LIBFTDI_FOUND)
 
     # handle the QUIETLY AND REQUIRED arguments AND set LIBFTDI_FOUND to TRUE if
     # all listed variables are TRUE
-    find_package_handle_standard_args(LIBFTDI DEFAULT_MSG LIBFTDI_LIBRARIES LIBFTDI_INCLUDE_DIR)
+    find_package_handle_standard_args(libftdi DEFAULT_MSG LIBFTDI_LIBRARIES LIBFTDI_INCLUDE_DIR)
 
     if(USE_STATIC_FTDI)
         add_library(libftdi STATIC IMPORTED)

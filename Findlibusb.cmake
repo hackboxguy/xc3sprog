@@ -17,7 +17,11 @@
 if (NOT LIBUSB_FOUND)
 
     if(NOT WIN32)
+        # Temporarily suppress developer warnings for PkgConfig
+        set(_saved_warn_dev ${CMAKE_WARN_DEVELOPER})
+        set(CMAKE_WARN_DEVELOPER OFF)
         include(FindPkgConfig)
+        set(CMAKE_WARN_DEVELOPER ${_saved_warn_dev})
         pkg_check_modules(LIBUSB_PKG libusb)
     endif(NOT WIN32)
 
@@ -53,7 +57,7 @@ if (NOT LIBUSB_FOUND)
 
     # handle the QUIETLY AND REQUIRED arguments AND set LIBUSB_FOUND to TRUE if
     # all listed variables are TRUE
-    find_package_handle_standard_args(LIBUSB DEFAULT_MSG LIBUSB_LIBRARIES LIBUSB_INCLUDE_DIR)
+    find_package_handle_standard_args(libusb DEFAULT_MSG LIBUSB_LIBRARIES LIBUSB_INCLUDE_DIR)
 
     if(USE_STATIC_USB)
         add_library(libusb STATIC IMPORTED)

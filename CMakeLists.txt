@@ -5,8 +5,12 @@ set(xc3sprog_VERSION_MINOR 0)
 
 SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}")
 set(CMAKE_CXX_FLAGS "-g -Wall")
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 3.12)
 
+# Suppress developer warnings (specifically for PkgConfig naming issues)
+set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON CACHE BOOL "Suppress developer warnings" FORCE)
+
+# Rest of your CMakeLists.txt content remains the same...
 if(${WIN32})
 set(USE_STATIC_FTDI ON)
 IF( ${CMAKE_COMPILER_IS_GNUCXX} )
@@ -32,7 +36,7 @@ else(LIBFTD2XX_FOUND)
   set(LIBFTD2XX_LIBRARIES "")
 endif(LIBFTD2XX_FOUND)
 
-if(EXISTS ${PROJECT_SOURCE_DIR}/.git) 
+if(EXISTS ${PROJECT_SOURCE_DIR}/.git)
   set(VERSION_STRING "${xc3sprog_VERSION_MAJOR}.${xc3sprog_VERSION_MINOR}-git")
 else(EXISTS ${PROJECT_SOURCE_DIR}/.git)
   FIND_PACKAGE(Subversion)
@@ -130,12 +134,12 @@ ADD_CUSTOM_COMMAND(OUTPUT cables.h
 
 INCLUDE_DIRECTORIES(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
 
-add_library(xc3sproglib  STATIC iogpiomatrixcreator.cpp iogpiomatrixvoice.cpp iogpiodpi.cpp ioftdi.cpp 
-                        iofx2.cpp devicedb.cpp jtag.cpp jedecfile.cpp bitfile.cpp 
-			iobase.cpp  progalgxc95x.cpp utilities.cpp
-			progalgxcf.cpp progalgxcfp.cpp progalgxc3s.cpp
-			progalgavr.cpp progalgxc2c.cpp  mapfile_xc2c.cpp
-			ioxpc.cpp progalgspiflash.cpp bitrev.cpp
+add_library(xc3sproglib  STATIC iogpiomatrixcreator.cpp iogpiomatrixvoice.cpp iogpiodpi.cpp ioftdi.cpp
+                        iofx2.cpp devicedb.cpp jtag.cpp jedecfile.cpp bitfile.cpp
+                        iobase.cpp  progalgxc95x.cpp utilities.cpp
+                        progalgxcf.cpp progalgxcfp.cpp progalgxc3s.cpp
+                        progalgavr.cpp progalgxc2c.cpp  mapfile_xc2c.cpp
+                        ioxpc.cpp progalgspiflash.cpp bitrev.cpp
                         cabledb.cpp pdioverjtag.cpp xmega_pdi_nvm.cpp
                         ${CONDITIONAL_FILES} devices.h cables.h)
 
@@ -148,8 +152,8 @@ target_link_libraries(xc2c_warp xc3sproglib ${CONDITIONAL_LIBS} ${GPIO_LIBS})
 add_executable(detectchain detectchain.cpp cables.h devices.h)
 target_link_libraries(detectchain xc3sproglib ${LIBFTDI_LIBRARIES} ${LIBFTD2XX_LIBRARIES} ${CONDITIONAL_LIBS} ${GPIO_LIBS})
 
-add_executable(xc3sprog xc3sprog.cpp javr.cpp srecfile.cpp progalgavr.cpp 
-			devices.h)
+add_executable(xc3sprog xc3sprog.cpp javr.cpp srecfile.cpp progalgavr.cpp
+                        devices.h)
 target_link_libraries(xc3sprog xc3sproglib ${LIBFTDI_LIBRARIES}  ${LIBFTD2XX_LIBRARIES} ${CONDITIONAL_LIBS}  ${GPIO_LIBS})
 
 add_executable(readdna readdna.cpp devices.h)
@@ -165,8 +169,36 @@ install(TARGETS bitparse DESTINATION bin)
 install(TARGETS jedecparse DESTINATION bin)
 install(TARGETS srecparse DESTINATION bin)
 install(TARGETS detectchain DESTINATION bin)
+
+# Install bscan_spi .bit files to share directory (following FHS)
+file(GLOB BSCAN_BIT_FILES "${CMAKE_SOURCE_DIR}/bscan_spi/*.bit")
+if(BSCAN_BIT_FILES)
+    install(FILES ${BSCAN_BIT_FILES} DESTINATION share/xc3sprog/bscan_spi)
+endif()
+
+# Optionally install compressed .bit files too
+file(GLOB BSCAN_BIT_GZ_FILES "${CMAKE_SOURCE_DIR}/bscan_spi/*.bit.gz")
+if(BSCAN_BIT_GZ_FILES)
+    install(FILES ${BSCAN_BIT_GZ_FILES} DESTINATION share/xc3sprog/bscan_spi)
+endif()
+
+# Install bscan_spi README for reference
+if(EXISTS "${CMAKE_SOURCE_DIR}/bscan_spi/README.txt")
+    install(FILES "${CMAKE_SOURCE_DIR}/bscan_spi/README.txt" 
+            DESTINATION share/xc3sprog/bscan_spi)
+endif()
+
+# Install the fpga-jtag-flasher wrapper script
+if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher.sh.in")
+    # Configure the script template with install paths
+    configure_file("${CMAKE_SOURCE_DIR}/fpga-jtag-flasher.sh.in"
+                   "${CMAKE_BINARY_DIR}/fpga-jtag-flasher.sh"
+                   @ONLY)
+    install(PROGRAMS "${CMAKE_BINARY_DIR}/fpga-jtag-flasher.sh" 
+            DESTINATION bin)
+endif()
 add_subdirectory(packages)
 include(CPack)
 
 
-SET_DIRECTORY_PROPERTIES(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES "${GENERATED_FILES}") 
+SET_DIRECTORY_PROPERTIES(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES "${GENERATED_FILES}")
