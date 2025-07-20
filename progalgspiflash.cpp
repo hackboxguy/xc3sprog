@@ -523,6 +523,20 @@ int ProgAlgSPIFlash::spi_flashinfo_issi(unsigned char *buf)
               mb, fbuf[1], fbuf[2]);
       pages = mb * 1024 * 1024 / 8 / pgsize;
       break;
+    case 0x60:  /* IS25LP series */
+      switch (fbuf[2])
+        {
+        case 0x18: /* IS25LP128F - 128Mbit */
+          mb = 128;
+          break;
+        default:
+          fprintf(stderr,"Unexpected IS25LP ID 0x%02x\n", fbuf[2]);
+          return -1;
+        }
+      fprintf(stderr, "Found ISSI IS25LP%03d Device (ID 0x%02x%02x)\n",
+              mb, fbuf[1], fbuf[2]);
+      pages = mb * 1024 * 1024 / 8 / pgsize;
+      break;
 
     default:
       fprintf(stderr,"ISSI: Unexpected RDID upper Device ID 0x%02x\n", fbuf[1]);
