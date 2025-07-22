@@ -1,8 +1,9 @@
 #include "iogpiomatrixcreator.h"
 
 IOGPIOMatrixCreator::IOGPIOMatrixCreator()
- //: IOGPIODPi(4, 17, 27, 22)
- : IOGPIODPi(26, 16, 21, 20)
+ //orig: IOGPIODPi(4, 17, 27, 22)
+ //slow: IOGPIODPi(26, 16, 21, 20)
+ : IOGPIODPi(25, 11, 10, 9)
 {
     // Pin mapping (in order: TMS, TCK, TDI, TDO):
     // GPIO4  -> TMS (Mode Select)

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # fpga-jtag-flasher.sh - FPGA JTAG Flash Programming Wrapper
 # Wrapper script for xc3sprog with enhanced functionality for FPGA programming
