@@ -546,6 +546,77 @@ int ProgAlgSPIFlash::spi_flashinfo_issi(unsigned char *buf)
   return 1;
 }
 
+int ProgAlgSPIFlash::spi_flashinfo_spansion(unsigned char *buf)
+{
+  int mb;
+
+  // buf is already bit-reversed and contains JEDEC ID from caller
+  // buf[0] = Manufacturer ID (0x01)
+  // buf[1] = Memory Type
+  // buf[2] = Memory Capacity
+
+  sector_size = 4096;
+  pgsize = 256;
+  sector_erase_cmd = 0x20;
+
+  switch (buf[1])
+    {
+    case 0x40:  /* S25FL-K series */
+      switch (buf[2])
+        {
+        case 0x15: /* S25FL116K - 16Mbit */
+          mb = 16;
+          break;
+
+        case 0x16: /* S25FL132K - 32Mbit */
+          mb = 32;
+          break;
+
+        case 0x17: /* S25FL164K - 64Mbit */
+          mb = 64;
+          break;
+
+        default:
+          fprintf(stderr,"Unexpected S25FL-K ID 0x%02x\n", buf[2]);
+          return -1;
+        }
+      fprintf(stderr, "Found Spansion S25FL%dK Device (ID 0x%02x%02x)\n",
+              mb, buf[1], buf[2]);
+      pages = mb * 1024 * 1024 / 8 / pgsize;
+      break;
+
+    case 0x60:  /* S25FL series (standard) */
+      switch (buf[2])
+        {
+        case 0x16: /* S25FL032 - 32Mbit */
+          mb = 32;
+          break;
+
+        case 0x17: /* S25FL064 - 64Mbit */
+          mb = 64;
+          break;
+
+        case 0x18: /* S25FL128 - 128Mbit */
+          mb = 128;
+          break;
+
+        default:
+          fprintf(stderr,"Unexpected S25FL ID 0x%02x\n", buf[2]);
+          return -1;
+        }
+      fprintf(stderr, "Found Spansion S25FL%03d Device (ID 0x%02x%02x)\n",
+              mb, buf[1], buf[2]);
+      pages = mb * 1024 * 1024 / 8 / pgsize;
+      break;
+
+    default:
+      fprintf(stderr,"Spansion: Unexpected RDID upper Device ID 0x%02x\n", buf[1]);
+      return -1;
+    }
+
+  return 1;
+}
+
 int ProgAlgSPIFlash::spi_flashinfo(void) 
 {
   byte fbuf[8]={READ_IDENTIFICATION, 0, 0, 0, 0, 0, 0, 0};
@@ -573,6 +644,9 @@ int ProgAlgSPIFlash::spi_flashinfo(void)
   
   switch (fbuf[0])
     {
+    case 0x01:
+      res = spi_flashinfo_spansion(fbuf);
+      break;
     case 0x1f: {
         switch (fbuf[1]>> 5) /* Family code*/ {
         case 1:
@@ -1255,6 +1329,7 @@ int ProgAlgSPIFlash::program(BitFile &pfile)
   switch (manf_id) {
   case 0x1f: /* Atmel */
     return program_at45(pfile);
+  case 0x01: /* Spansion */
   case 0x20: /* Numonyx */
   case 0xc2: /* Macronix */
   case 0x30: /* AMIC */
@@ -1447,6 +1522,7 @@ int ProgAlgSPIFlash::erase(void)
   switch (manf_id) {
   case 0x1f: /* Atmel */
     return erase_at45();
+  case 0x01: /* Spansion */
   case 0x20: /* Numonyx */
   case 0xc2: /* Macronix */
   case 0x30: /* AMIC */
