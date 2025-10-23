@@ -30,8 +30,9 @@ l_motctl_avr  avr109  8000000 0x0403:0x6010:L_MOTCTL:1:0x00:0x00:0x00:0x00
 knob2usb      ftdi    0       0x0403:0x6010:KNOB2USB:0:0x00:0x10:0x00:0x40         
 qm07_pu       ftdi    0       0x0403:0x6010:QM07_PU:0:0x00:0x10:0x00:0x04          
 qm07-pu       ftdi    0       0x0403:0x6010:QM07-PU:0:0x00:0x10:0x00:0x04          
-xpc           xpc     0       0x03fd:0x0008                                        
-xpc_internal  xpc     0       0x03fd:0x0008                                        
+xpc           xpc     0       0x03fd:0x0008
+xpc_internal  xpc     0       0x03fd:0x0008
+xpc2          xpc     0       0x03fd:0x0013
 llbbc08       fx2     0       0xfffe:0x0018                                        
 qdu16         fx2     0       0xfffe:0x0018                                        
 pp            pp      0       NULL                                                 

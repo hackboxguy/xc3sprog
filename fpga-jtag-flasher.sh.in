@@ -9,6 +9,7 @@ set -e  # Exit on any error
 # Configuration (set by CMake)
 XC3SPROG_BIN="@CMAKE_INSTALL_PREFIX@/bin/xc3sprog"
 BSCAN_PATH="@CMAKE_INSTALL_PREFIX@/share/xc3sprog/bscan_spi"
+XPC2_LOADER="@CMAKE_INSTALL_PREFIX@/bin/xc3sprog-xpc2.sh"
 
 # Fallback to system paths if installed files not found
 if [ ! -x "$XC3SPROG_BIN" ]; then
@@ -17,6 +18,10 @@ fi
 
 if [ ! -d "$BSCAN_PATH" ]; then
     BSCAN_PATH="/usr/share/xc3sprog/bscan_spi"
+fi
+
+if [ ! -x "$XPC2_LOADER" ]; then
+    XPC2_LOADER="/usr/local/bin/xc3sprog-xpc2.sh"
 fi
 
 DEFAULT_CABLE="gpiod_creator"
@@ -298,6 +303,10 @@ COMMANDS:
 
 OPTIONS:
     --cable=CABLE              JTAG cable type (default: $DEFAULT_CABLE)
+                               Common cables: gpiod_creator (Pi GPIO 3.3V)
+                                              xpc2 (Platform Cable USB II 1.8V/3.3V)
+    --xpc-firmware=FILE        XPC2 firmware file (auto-enables --cable=xpc2)
+                               Loads firmware to Waveshare Platform Cable USB
     --position=POS             JTAG chain position (default: $DEFAULT_POSITION)
     --bscan=FILE               Custom bscan bitstream file
     --size=BYTES               Size in bytes for dump operation
@@ -306,13 +315,19 @@ OPTIONS:
     --dry-run                  Show commands without executing
 
 EXAMPLES:
+    # 3.3V targets with Pi GPIO (default, no --xpc-firmware needed)
     $(basename "$0") --info
-    $(basename "$0") --info --skipbitstream
     $(basename "$0") --flash=/path/to/fpga.bin
-    $(basename "$0") --flash=/path/to/fpga.bin --skipbitstream
+
+    # 1.8V targets with Platform Cable USB II (Waveshare)
+    $(basename "$0") --xpc-firmware=/home/pi/firmware/xusb_xp2.hex --info
+    $(basename "$0") --xpc-firmware=/home/pi/firmware/xusb_xp2.hex --flash=/path/to/fpga.bin
+    $(basename "$0") --xpc-firmware=/home/pi/firmware/xusb_xp2.hex --dump=/tmp/backup.bin --size=4194304
+
+    # Other examples
+    $(basename "$0") --info --skipbitstream
     $(basename "$0") --dump=/home/pi/backup.bin --size=4194304
     $(basename "$0") --dump=/home/pi/backup.bin --size=4194304 --verbose
-    $(basename "$0") --cable=ft2232 --position=1 --info
     $(basename "$0") --flash=/path/to/fpga.bin --verbose --dry-run
 
 COMMON DUMP SIZES:
@@ -357,6 +372,7 @@ find_bscan_file() {
         "XC7S50T")     bscan_file="$BSCAN_PATH/xc7s50csga324-1.bit" ;;
         "XC7A75T")     bscan_file="$BSCAN_PATH/xc7a75t-2fgg484.bit" ;;
         "XC7A35T"|"XC7A50T")
+                       bscan_file="$BSCAN_PATH/xc7s50csga324-1.bit" ;;
         "XC6SLX16")    bscan_file="$BSCAN_PATH/xc6slx16_cs324.bit" ;;
         "XC6SLX45")    bscan_file="$BSCAN_PATH/xc6slx45-fg484.bit" ;;
         "XC6SLX75T")   bscan_file="$BSCAN_PATH/xc6slx75-t-fg484.bit" ;;
@@ -376,6 +392,44 @@ find_bscan_file() {
         log_error "Bscan file not found: $bscan_file"
         return 1
     fi
+}
+
+# Validate and check cable availability
+validate_cable() {
+    local cable="$1"
+
+    case "$cable" in
+        gpiod_creator|gpiod_voice)
+            # GPIO cables - always available on Pi4
+            return 0
+            ;;
+        xpc|xpc2|xpc_internal)
+            # USB Platform Cable - check if device is connected
+            if lsusb -d 03fd:0008 >/dev/null 2>&1 || lsusb -d 03fd:0013 >/dev/null 2>&1; then
+                return 0
+            else
+                log_error "Platform Cable USB not found (cable=$cable)"
+                log_error "Please connect Xilinx/Waveshare Platform Cable USB"
+                log_error "Run 'lsusb' to check if device 03fd:0008 or 03fd:0013 is present"
+                return 1
+            fi
+            ;;
+        ftdi|ft2232|ft4232h|ft232h)
+            # FTDI cables - check if any FTDI device present
+            if lsusb -d 0403: >/dev/null 2>&1; then
+                return 0
+            else
+                log_error "FTDI cable not found (cable=$cable)"
+                log_error "Please connect FTDI-based JTAG cable"
+                return 1
+            fi
+            ;;
+        *)
+            # Unknown cable - let xc3sprog handle it
+            log_warning "Unknown cable type: $cable (will try anyway)"
+            return 0
+            ;;
+    esac
 }
 
 # Parse SPI flash device from JEDEC ID
@@ -413,13 +467,18 @@ get_info() {
     local skip_bitstream="$4"
     
     log_info "Please Wait...reading jtag chain info"
-    
+
     # Check if xc3sprog exists and is executable
     if [ ! -x "$XC3SPROG_BIN" ]; then
         log_error "xc3sprog not found at $XC3SPROG_BIN"
         return 1
     fi
-    
+
+    # Validate cable is available
+    if ! validate_cable "$cable"; then
+        return 1
+    fi
+
     # First, try to detect FPGA device without bscan
     local cmd_detect="$XC3SPROG_BIN -c $cable -p $position"
     local output_detect
@@ -466,7 +525,7 @@ get_info() {
     # CRITICAL: Check if we should skip bscan (flash detection)
     if [ "$skip_bitstream" = "1" ]; then
         log_info "Skipping bscan bitstream and flash detection (--skipbitstream specified)"
-        log_success "IDCODE=$idcode : DEVICE=$device : FLASH=SKIPPED"
+        log_success "IDCODE=$idcode : DEVICE=$device : FLASH=SKIPPED : CABLE=$cable"
         return 0
     fi
     
@@ -478,7 +537,7 @@ get_info() {
         log_info "Trying to auto-detect bscan file for $device..."
         if ! bscan_file=$(find_bscan_file "$device"); then
             log_warning "No bscan file found for $device, skipping flash detection"
-            log_success "IDCODE=$idcode : DEVICE=$device : FLASH=NOT_DETECTED"
+            log_success "IDCODE=$idcode : DEVICE=$device : FLASH=NOT_DETECTED : CABLE=$cable"
             return 0
         fi
         log_info "Using bscan file: $bscan_file"
@@ -501,21 +560,21 @@ get_info() {
     local output_flash
     if ! output_flash=$(sudo $cmd_flash 2>&1); then
         log_warning "Flash detection failed, but FPGA was detected"
-        log_success "IDCODE=$idcode : DEVICE=$device : FLASH=DETECTION_FAILED"
+        log_success "IDCODE=$idcode : DEVICE=$device : FLASH=DETECTION_FAILED : CABLE=$cable"
         return 0
     fi
     
     # Extract JEDEC ID if available
     local flash_jedec flash_device
     flash_jedec=$(echo "$output_flash" | grep "JEDEC:" | cut -d: -f2 | tr -s ' ' | sed 's/^ *//; s/ *$//')
-    
+
     if [ -n "$flash_jedec" ]; then
         # JEDEC string is already properly formatted from xc3sprog
         flash_device=$(get_flash_device "$flash_jedec")
-        log_success "IDCODE=$idcode : DEVICE=$device : FLASH=$flash_device : SPI-FLASH-JEDEC=$flash_jedec"
+        log_success "IDCODE=$idcode : DEVICE=$device : FLASH=$flash_device : SPI-FLASH-JEDEC=$flash_jedec : CABLE=$cable"
     else
         log_warning "SPI flash not detected with bscan bitstream"
-        log_success "IDCODE=$idcode : DEVICE=$device : FLASH=NOT_DETECTED"
+        log_success "IDCODE=$idcode : DEVICE=$device : FLASH=NOT_DETECTED : CABLE=$cable"
     fi
 }
 
@@ -777,7 +836,8 @@ main() {
     local dump_size=""
     local skip_bitstream=0
     local dry_run=0
-    
+    local xpc_firmware=""
+
     # Parse command line arguments
     while [ $# -gt 0 ]; do
         case $1 in
@@ -801,6 +861,12 @@ main() {
                 ;;
             --cable=*)
                 cable="${1#*=}"
+                shift
+                ;;
+            --xpc-firmware=*)
+                xpc_firmware="${1#*=}"
+                # Auto-enable xpc2 cable when firmware is specified
+                cable="xpc2"
                 shift
                 ;;
             --position=*)
@@ -845,7 +911,38 @@ main() {
         show_usage
         exit 1
     fi
-    
+
+    # Load XPC2 firmware if specified
+    if [ -n "$xpc_firmware" ]; then
+        if [ ! -f "$xpc_firmware" ]; then
+            log_error "XPC firmware file not found: $xpc_firmware"
+            exit 1
+        fi
+
+        if [ ! -x "$XPC2_LOADER" ]; then
+            log_error "XPC2 firmware loader not found: $XPC2_LOADER"
+            log_error "Please ensure xc3sprog-xpc2.sh is installed"
+            exit 1
+        fi
+
+        if [ $VERBOSE -eq 1 ]; then
+            log_info "Loading XPC2 firmware from: $xpc_firmware"
+            if ! "$XPC2_LOADER" --xpc-firmware="$xpc_firmware" --verbose; then
+                log_error "Failed to load XPC2 firmware"
+                exit 1
+            fi
+        else
+            if ! "$XPC2_LOADER" --xpc-firmware="$xpc_firmware"; then
+                log_error "Failed to load XPC2 firmware"
+                exit 1
+            fi
+        fi
+
+        if [ $VERBOSE -eq 1 ]; then
+            log_success "XPC2 firmware loaded successfully"
+        fi
+    fi
+
     # Execute command
     case "$command" in
         "info")

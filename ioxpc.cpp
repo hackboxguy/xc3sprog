@@ -119,14 +119,16 @@ int IOXPC::Init(struct cable_t *cable, char const *serial, unsigned int freq)
   res = xpcu_read_cpld_version(xpcu, buf);
   if (res < 0)
   {
-      fprintf(stderr,"xpcu_read_cpld_version:  failed\n");
-      return res;
+      fprintf(stderr,"xpcu_read_cpld_version:  failed (Waveshare cable may not have CPLD)\n");
+      // Don't fail - Waveshare clones might not have CPLD
+      buf[0] = 0;
+      buf[1] = 0;
   }
   if (verbose)
   {
-      fprintf(stderr, "firmware version = 0x%02x%02x (%u)\n", 
+      fprintf(stderr, "firmware version = 0x%02x%02x (%u)\n",
               buf[1], buf[0], buf[1]<<8| buf[0]);
-      fprintf(stderr, "CPLD version = 0x%02x%02x (%u)\n", 
+      fprintf(stderr, "CPLD version = 0x%02x%02x (%u)\n",
               buf[1], buf[0], buf[1]<<8| buf[0]);
       if(hid)
 #ifdef __WIN32__
@@ -135,12 +137,13 @@ int IOXPC::Init(struct cable_t *cable, char const *serial, unsigned int freq)
       fprintf(stderr, "DLC HID = 0x%015llx\n", hid);
 #endif
   }
-  if(!buf[1] && !buf[0])
+  // Skip version check for Waveshare clones
+  /*if(!buf[1] && !buf[0])
   {
       fprintf(stderr,"Warning: version '0' can't be correct."
               " Please try resetting the cable\n");
       return 1;
-  }
+  }*/
   
   if (subtype == XPC_INTERNAL)
     {
@@ -155,7 +158,10 @@ int IOXPC::Init(struct cable_t *cable, char const *serial, unsigned int freq)
   else
     {
       unsigned char zero[2] = {0,0};
-      
+
+      // Add delay for Waveshare cable to stabilize after firmware load
+      usleep(100000); // 100ms delay
+
       r = xpcu_request_28(xpcu, 0x11);
       if (r>=0) r = xpcu_output_enable(xpcu, 1);
       if (r>=0) r = xpcu_shift(xpcu, 0xA6, 2, 2, zero, 0, NULL);
@@ -388,7 +394,9 @@ IOXPC::xpcu_shift(struct usb_dev_handle *xpcu, int reqno, int bits,
   
   if(usb_bulk_write(xpcu, 0x02, (char*)in, in_len, 1000)<0)
     {
-      fprintf(fp_dbg, "\nusb_bulk_write error(shift): %s\n", usb_strerror());
+      if(fp_dbg)
+        fprintf(fp_dbg, "\nusb_bulk_write error(shift): %s\n", usb_strerror());
+      fprintf(stderr, "\nusb_bulk_write error(shift): %s\n", usb_strerror());
       return -1;
     }
   calls_wr++;
@@ -732,8 +740,15 @@ int IOXPC::xpc_usb_open_desc(int vendor, int product, const char* description,
 			 __FUNCTION__);
 		fprintf (stderr, "%s\n", usb_strerror());
 		usb_close (xpcu);
-		xpc_error_return(-11, 
+		xpc_error_return(-11,
 				       "unable to claim interface");
+	      }
+	      // Set alternate interface 1 (has 6 endpoints, alt 0 has 0 endpoints)
+	      if (usb_set_altinterface(xpcu, 1) < 0) {
+		fprintf (stderr, "%s:usb_set_altinterface: failed to set alt interface 1\n",
+			 __FUNCTION__);
+		fprintf (stderr, "%s\n", usb_strerror());
+		// Don't fail - some cables might not need this
 	      }
 #if 0
 	      int rc = xpcu_read_hid(xpcu);
