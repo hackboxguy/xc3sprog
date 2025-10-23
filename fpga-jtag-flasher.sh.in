@@ -27,6 +27,29 @@ fi
 DEFAULT_CABLE="gpiod_creator"
 DEFAULT_POSITION=0
 VERBOSE=0
+USE_SUDO=0  # Flag to determine if sudo is needed
+
+# Helper function to conditionally use sudo
+# Handles: buildroot (root user), Pi OS (non-root), missing sudo
+run_xc3sprog() {
+    # Check if already running as root
+    if [ "$(id -u)" = "0" ]; then
+        # Already root (buildroot or sudo su), run directly
+        "$@"
+    # Check if sudo is available
+    elif ! command -v sudo >/dev/null 2>&1; then
+        # sudo not available (minimal buildroot?), try direct
+        # This may fail if not root and permissions not set
+        "$@"
+    # Check if XPC2 cable requires sudo
+    elif [ $USE_SUDO -eq 1 ]; then
+        # Non-root user with XPC2 cable - use sudo
+        sudo "$@"
+    else
+        # Non-root user with GPIO cable - run directly (no USB access needed)
+        "$@"
+    fi
+}
 
 # USB stick configuration
 # Use /tmp to avoid potential /mnt permission/I/O issues
@@ -486,8 +509,9 @@ get_info() {
     if [ $VERBOSE -eq 1 ]; then
         log_info "Running device detection: $cmd_detect"
     fi
-    
-    if ! output_detect=$(sudo $cmd_detect 2>&1); then
+
+    # Use sudo only if USE_SUDO flag is set (for xpc2 cable)
+    if ! output_detect=$(run_xc3sprog $cmd_detect 2>&1); then
         if [ $VERBOSE -eq 1 ]; then
             log_error "Command failed: $cmd_detect"
             log_error "Output: $output_detect"
@@ -558,7 +582,7 @@ get_info() {
     
     # Execute flash detection command
     local output_flash
-    if ! output_flash=$(sudo $cmd_flash 2>&1); then
+    if ! output_flash=$(run_xc3sprog $cmd_flash 2>&1); then
         log_warning "Flash detection failed, but FPGA was detected"
         log_success "IDCODE=$idcode : DEVICE=$device : FLASH=DETECTION_FAILED : CABLE=$cable"
         return 0
@@ -612,7 +636,7 @@ flash_bitstream() {
     local cmd_detect="$XC3SPROG_BIN -c $cable -p $position"
     local output_detect
 
-    if ! output_detect=$(sudo $cmd_detect 2>&1); then
+    if ! output_detect=$(run_xc3sprog $cmd_detect 2>&1); then
         log_error "Failed to detect FPGA device"
         unmount_usb_stick
         return 1
@@ -665,7 +689,7 @@ flash_bitstream() {
     
     # Execute flash programming
     if [ "$dry_run" -eq 1 ]; then
-        log_info "DRY RUN: Would execute: sudo $cmd_flash"
+        log_info "DRY RUN: Would execute: run_xc3sprog $cmd_flash"
         unmount_usb_stick
         return 0
     fi
@@ -676,7 +700,7 @@ flash_bitstream() {
     local start_time=$(date +%s)
     local output_flash
 
-    if ! output_flash=$(sudo $cmd_flash 2>&1); then
+    if ! output_flash=$(run_xc3sprog $cmd_flash 2>&1); then
         log_error "Flash programming failed!"
         log_error "Command output:"
         echo "$output_flash"
@@ -755,7 +779,7 @@ dump_flash() {
     local cmd_detect="$XC3SPROG_BIN -c $cable -p $position"
     local output_detect
 
-    if ! output_detect=$(sudo $cmd_detect 2>&1); then
+    if ! output_detect=$(run_xc3sprog $cmd_detect 2>&1); then
         log_error "Failed to detect FPGA device"
         return 1
     fi
@@ -803,7 +827,7 @@ dump_flash() {
 
     log_info "Reading flash memory (this may take several minutes)..."
 
-    if sudo $cmd_dump 2>&1; then
+    if run_xc3sprog $cmd_dump 2>&1; then
         # Verify the dump file was created and has correct size
         if [ -f "$dump_file" ]; then
             local actual_size=$(stat -c%s "$dump_file" 2>/dev/null || wc -c < "$dump_file")
@@ -914,6 +938,9 @@ main() {
 
     # Load XPC2 firmware if specified
     if [ -n "$xpc_firmware" ]; then
+        # XPC2 cable requires sudo for both firmware loading and xc3sprog access
+        USE_SUDO=1
+
         if [ ! -f "$xpc_firmware" ]; then
             log_error "XPC firmware file not found: $xpc_firmware"
             exit 1
@@ -925,21 +952,26 @@ main() {
             exit 1
         fi
 
+        # Determine if we need sudo for firmware loading
+        # Same logic as run_xc3sprog: skip sudo if root or sudo unavailable
+        local LOADER_CMD="$XPC2_LOADER"
+        if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1; then
+            LOADER_CMD="sudo $XPC2_LOADER"
+        fi
+
+        # Always log firmware loading (not just in verbose mode)
+        log_info "Loading XPC2 firmware..."
+
         if [ $VERBOSE -eq 1 ]; then
-            log_info "Loading XPC2 firmware from: $xpc_firmware"
-            if ! "$XPC2_LOADER" --xpc-firmware="$xpc_firmware" --verbose; then
+            if ! $LOADER_CMD --xpc-firmware="$xpc_firmware" --verbose; then
                 log_error "Failed to load XPC2 firmware"
                 exit 1
             fi
         else
-            if ! "$XPC2_LOADER" --xpc-firmware="$xpc_firmware"; then
+            if ! $LOADER_CMD --xpc-firmware="$xpc_firmware"; then
                 log_error "Failed to load XPC2 firmware"
                 exit 1
             fi
-        fi
-
-        if [ $VERBOSE -eq 1 ]; then
-            log_success "XPC2 firmware loaded successfully"
         fi
     fi
 
