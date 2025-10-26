@@ -169,6 +169,8 @@ install(TARGETS bitparse DESTINATION bin)
 install(TARGETS jedecparse DESTINATION bin)
 install(TARGETS srecparse DESTINATION bin)
 install(TARGETS detectchain DESTINATION bin)
+install(PROGRAMS "${CMAKE_SOURCE_DIR}/xc3sprog-xpc2.sh" DESTINATION bin)
+install(FILES "${CMAKE_SOURCE_DIR}/xusb_xp2.hex" DESTINATION bin)
 
 # Install bscan_spi .bit files to share directory (following FHS)
 file(GLOB BSCAN_BIT_FILES "${CMAKE_SOURCE_DIR}/bscan_spi/*.bit")
