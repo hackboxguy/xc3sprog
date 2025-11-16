@@ -196,9 +196,22 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher.sh.in")
     configure_file("${CMAKE_SOURCE_DIR}/fpga-jtag-flasher.sh.in"
                    "${CMAKE_BINARY_DIR}/fpga-jtag-flasher.sh"
                    @ONLY)
-    install(PROGRAMS "${CMAKE_BINARY_DIR}/fpga-jtag-flasher.sh" 
+    install(PROGRAMS "${CMAKE_BINARY_DIR}/fpga-jtag-flasher.sh"
             DESTINATION bin)
 endif()
+
+# Install fpga-jtag-flasher-wrapper.sh script
+if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-wrapper.sh")
+    install(PROGRAMS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-wrapper.sh"
+            DESTINATION bin)
+endif()
+
+# Install fpga-jtag-flasher-lattice.sh script
+if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-lattice.sh")
+    install(PROGRAMS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-lattice.sh"
+            DESTINATION bin)
+endif()
+
 add_subdirectory(packages)
 include(CPack)
 

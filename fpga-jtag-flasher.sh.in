@@ -360,10 +360,14 @@ COMMON DUMP SIZES:
     8 MB:    --size=8388608
 
 SUPPORTED FPGA DEVICES:
-    Auto-detected based on JTAG ID. Common bscan files available:
-    - XC7S50T (xc7s50csga324-1.bit)
-    - XC6SLX series (xc6slx16_cs324.bit, xc6slx45-fg484.bit, etc.)
-    - XC3S series (xc3s250e_godil.bit, xc3s400an.bit, etc.)
+    Auto-detected based on JTAG ID. Common devices:
+    - Xilinx 7-Series: XC7S50T, XC7A35T, XC7A50T, XC7A75T
+    - Xilinx 6-Series: XC6SLX16, XC6SLX45, XC6SLX75T
+    - Xilinx 3-Series: XC3S250E, XC3S400AN, XC3S500E
+    - Lattice ECP5: LFE5UM-45
+
+    Note: Xilinx devices use bscan bitstreams for flash access.
+    Lattice devices may require --skipbitstream flag for basic detection.
 
 EOF
 }
@@ -372,16 +376,21 @@ EOF
 get_fpga_device() {
     local idcode="$1"
     case "$idcode" in
+        # Xilinx 7-Series FPGAs
         "0x0362f093") echo "XC7S50T" ;;
         "0x03632093"|"0x13632093") echo "XC7A75T" ;;
         "0x0362D093") echo "XC7A35T" ;;
         "0x0362C093") echo "XC7A50T" ;;
+        # Xilinx 6-Series FPGAs
         "0x04250093") echo "XC6SLX16" ;;
         "0x04286093") echo "XC6SLX45" ;;
         "0x0428c093") echo "XC6SLX75T" ;;
+        # Xilinx 3-Series FPGAs
         "0x01414093") echo "XC3S250E" ;;
         "0x0141c093") echo "XC3S400AN" ;;
         "0x01428093") echo "XC3S500E" ;;
+        # Lattice ECP5 FPGAs
+        "0x01112043"|"0x1112043") echo "LFE5UM-45" ;;
         *) echo "UNKNOWN($idcode)" ;;
     esac
 }
