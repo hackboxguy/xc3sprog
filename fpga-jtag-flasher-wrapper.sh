@@ -15,6 +15,9 @@ DEFAULT_LATTICE_FLASHER="$MICROPANEL_HOME/fpga/bin/fpga-jtag-flasher-lattice.sh"
 DEFAULT_BITBIN_DIR="$MICROPANEL_HOME/fpga/bitbin"
 DEFAULT_BACKUP_DIR="$MICROPANEL_HOME/usr/backups"
 
+# Lattice ECP5 flash size (full CFG sector including trailing padding)
+DEFAULT_LATTICE_FLASH_SIZE=1078990
+
 # USB stick configuration
 USB_MOUNT_POINT="/tmp/micropanel-usb"
 USB_MOUNTED_BY_SCRIPT=0
@@ -165,6 +168,59 @@ unmount_usb_stick() {
         fi
     fi
     return 0
+}
+
+# Sanitize Lattice .bit file for internal flash programming
+# Strips Lattice ASCII header (replaces with 0xFF) and pads to full CFG sector size.
+# Diamond-generated .bit files contain a text header (0xFF00 + metadata) that corrupts
+# the pre-preamble flash area. The ECP5 config engine scans for preamble 0xFFFFBDB3
+# by skipping 0xFF bytes - non-0xFF header bytes cause configuration abort.
+sanitize_lattice_bitstream() {
+    local input_file="$1"
+    local output_file="$2"
+    local flash_size="${3:-$DEFAULT_LATTICE_FLASH_SIZE}"
+
+    # Check if file starts with Lattice header magic (0xFF 0x00 followed by "Lattice")
+    local magic
+    magic=$(od -A n -t x1 -N 2 "$input_file" 2>/dev/null | tr -d ' ')
+
+    if [ "$magic" = "ff00" ]; then
+        log_info "Detected Lattice Diamond header in bitstream, sanitizing..."
+
+        # Find preamble offset (0xFFFFBDB3) and replace header with 0xFF padding,
+        # then pad to full flash sector size
+        python3 -c "
+import sys
+PREAMBLE = b'\\xff\\xff\\xbd\\xb3'
+with open(sys.argv[1], 'rb') as f:
+    data = f.read()
+pos = data.find(PREAMBLE)
+if pos < 0:
+    print('ERROR: ECP5 preamble not found', file=sys.stderr)
+    sys.exit(1)
+flash = b'\\xff' * pos + data[pos:]
+target = int(sys.argv[3])
+if len(flash) < target:
+    flash += b'\\xff' * (target - len(flash))
+with open(sys.argv[2], 'wb') as f:
+    f.write(flash)
+print(f'Sanitized: header={pos}B replaced, padded to {len(flash)}B')
+" "$input_file" "$output_file" "$flash_size"
+
+        if [ $? -ne 0 ]; then
+            log_error "Failed to sanitize Lattice bitstream"
+            return 1
+        fi
+
+        log_success "Bitstream sanitized for flash programming"
+        return 0
+    else
+        if [ $VERBOSE -eq 1 ]; then
+            log_info "Bitstream has no Lattice header (raw flash format), no sanitization needed"
+        fi
+        cp "$input_file" "$output_file"
+        return 0
+    fi
 }
 
 # Resolve input file with USB priority
@@ -329,11 +385,23 @@ main() {
 
             # Flash using appropriate tool
             if [ "$fpga_type" = "lattice" ]; then
-                if ! $SUDO_CMD "$flasher_tool" --flash="$bitstream_file"; then
-                    log_error "Flash operation failed"
+                # Sanitize Lattice bitstream: strip Diamond ASCII header
+                # and pad to full CFG flash sector size
+                local sanitized_file="/tmp/fpga-sanitized-$$.bin"
+                if ! sanitize_lattice_bitstream "$bitstream_file" "$sanitized_file"; then
+                    log_error "Bitstream sanitization failed"
+                    rm -f "$sanitized_file"
                     unmount_usb_stick
                     exit 1
                 fi
+
+                if ! $SUDO_CMD "$flasher_tool" --flash="$sanitized_file"; then
+                    log_error "Flash operation failed"
+                    rm -f "$sanitized_file"
+                    unmount_usb_stick
+                    exit 1
+                fi
+                rm -f "$sanitized_file"
             else
                 if ! "$flasher_tool" --flash="$bitstream_file"; then
                     log_error "Flash operation failed"
