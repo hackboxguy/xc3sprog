@@ -223,6 +223,61 @@ print(f'Sanitized: header={pos}B replaced, padded to {len(flash)}B')
     fi
 }
 
+check_expected_device() {
+    local expected_device="$1"
+    local fpga_type="$2"
+    local flasher_tool="$3"
+
+    if [ -z "$expected_device" ]; then
+        return 0
+    fi
+
+    log_info "Checking FPGA device (expected: $expected_device)"
+
+    local info_output
+    if [ "$fpga_type" = "lattice" ]; then
+        if ! info_output=$($SUDO_CMD "$flasher_tool" --info 2>&1); then
+            log_error "Failed to detect FPGA device before operation"
+            if [ $VERBOSE -eq 1 ]; then
+                printf "%s\n" "$info_output" >&2
+            fi
+            return 1
+        fi
+    else
+        if ! info_output=$("$flasher_tool" --info --skipbitstream 2>&1); then
+            log_error "Failed to detect FPGA device before operation"
+            if [ $VERBOSE -eq 1 ]; then
+                printf "%s\n" "$info_output" >&2
+            fi
+            return 1
+        fi
+    fi
+
+    local detected_device
+    detected_device=$(printf "%s\n" "$info_output" | sed -n 's/.*DEVICE=\([^ :]*\).*/\1/p' | head -n1)
+
+    if [ -z "$detected_device" ]; then
+        log_error "Could not parse detected FPGA device from info output"
+        if [ $VERBOSE -eq 1 ]; then
+            printf "%s\n" "$info_output" >&2
+        fi
+        return 1
+    fi
+
+    if [ "$detected_device" != "$expected_device" ]; then
+        log_error "FPGA device mismatch"
+        log_error "Expected: $expected_device"
+        log_error "Detected: $detected_device"
+        if [ $VERBOSE -eq 1 ]; then
+            printf "%s\n" "$info_output" >&2
+        fi
+        return 1
+    fi
+
+    log_success "FPGA device check passed: $detected_device"
+    return 0
+}
+
 # Resolve input file with USB priority
 resolve_input_file() {
     local usb_file="$1"
@@ -263,6 +318,7 @@ OPTIONS:
     --operation=OP         Operation: flash, dump, revert
     --file=NAME            Base filename (without extension)
     --fpga-type=TYPE       FPGA type: xilinx or lattice
+    --expected-device=NAME Optional detected FPGA device guard
     --size=BYTES           Flash size in bytes (required for dump)
     --bitbin-dir=DIR       Bitstream directory (default: $DEFAULT_BITBIN_DIR)
     --backup-dir=DIR       Backup directory (default: $DEFAULT_BACKUP_DIR)
@@ -302,6 +358,7 @@ main() {
     local backup_dir="$DEFAULT_BACKUP_DIR"
     local fpga_flasher="$DEFAULT_FPGA_FLASHER"
     local lattice_flasher="$DEFAULT_LATTICE_FLASHER"
+    local expected_device=""
 
     # Parse arguments
     while [ $# -gt 0 ]; do
@@ -316,6 +373,10 @@ main() {
                 ;;
             --fpga-type=*)
                 fpga_type="${1#*=}"
+                shift
+                ;;
+            --expected-device=*)
+                expected_device="${1#*=}"
                 shift
                 ;;
             --size=*)
@@ -367,6 +428,10 @@ main() {
     else
         file_ext="bin"
         flasher_tool="$fpga_flasher"
+    fi
+
+    if ! check_expected_device "$expected_device" "$fpga_type" "$flasher_tool"; then
+        exit 1
     fi
 
     # Execute operation
