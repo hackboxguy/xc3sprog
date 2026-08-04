@@ -21,7 +21,12 @@ if (NOT LIBFTDI_FOUND)
         set(CMAKE_WARN_DEVELOPER OFF)
         include(FindPkgConfig)
         set(CMAKE_WARN_DEVELOPER ${_saved_warn_dev})
-        pkg_check_modules(LIBFTDI_PKG libftdi)
+        pkg_check_modules(LIBFTDI_PKG QUIET libftdi)
+        if (NOT LIBFTDI_PKG_FOUND)
+            # Alpine and current libftdi releases expose the pkg-config module
+            # and library as libftdi1/ftdi1 rather than libftdi/ftdi.
+            pkg_check_modules(LIBFTDI_PKG libftdi1)
+        endif()
     endif(NOT WIN32)
 
     find_path(LIBFTDI_INCLUDE_DIR
@@ -42,6 +47,7 @@ if (NOT LIBFTDI_FOUND)
     find_library(LIBFTDI_LIBRARIES
         NAMES
             ftdi
+            ftdi1
         HINTS
             ${LIBFTDI_PKG_LIBRARY_DIRS}
         PATHS
