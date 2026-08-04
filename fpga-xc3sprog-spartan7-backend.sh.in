@@ -66,12 +66,12 @@ probe_output="$("$XC3SPROG" -c xpc2 -p 0 -I"$BSCAN" 2>&1)" || {
     echo "Target or configuration storage probe failed." >&2
     exit 2
 }
-normalized_probe="$(printf '%s' "$probe_output" | tr 'A-F' 'a-f')"
+normalized_probe="$(printf '%s' "$probe_output" | tr '[:upper:]' '[:lower:]')"
 case "$normalized_probe" in
     *"idcode: $EXPECTED_IDCODE"*) ;;
     *) echo "Unexpected JTAG target." >&2; exit 2 ;;
 esac
-normalized_jedec="$(printf '%s' "$probe_output" | tr 'A-F' 'a-f' | tr -cd '0-9a-f')"
+normalized_jedec="$(printf '%s' "$probe_output" | tr '[:upper:]' '[:lower:]' | tr -cd '0-9a-f')"
 case "$normalized_jedec" in
     *"$EXPECTED_JEDEC"*) ;;
     *) echo "Unexpected configuration storage." >&2; exit 2 ;;
