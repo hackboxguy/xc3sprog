@@ -1,0 +1,91 @@
+#!/bin/sh
+# Fixed-operation backend for the FPGA Flasher service.
+#
+# This is intentionally not a general XC3SPROG wrapper: callers cannot choose
+# the cable, JTAG position, BSCAN image, flash range, target or verification
+# policy.  It is installed only by the private Spartan-7 appliance package.
+set -eu
+
+XC3SPROG="@CMAKE_INSTALL_PREFIX@/bin/xc3sprog"
+XPC2_LOADER="@CMAKE_INSTALL_PREFIX@/bin/xc3sprog-xpc2.sh"
+XPC2_FIRMWARE="@CMAKE_INSTALL_PREFIX@/bin/xusb_xp2.hex"
+BSCAN="@CMAKE_INSTALL_PREFIX@/share/xc3sprog/bscan_spi/xc7s50csga324-1.bit"
+EXPECTED_IDCODE="0x0362f093"
+EXPECTED_JEDEC="9d6018"
+FLASH_BYTES=16777216
+
+operation=""
+image=""
+
+usage() {
+    echo "Usage: $0 --operation=probe|flash [--image=/absolute/path/image.bin]" >&2
+    exit 2
+}
+
+for argument in "$@"; do
+    case "$argument" in
+        --operation=probe|--operation=flash) operation="${argument#*=}" ;;
+        --image=*) image="${argument#*=}" ;;
+        *) usage ;;
+    esac
+done
+
+[ -n "$operation" ] || usage
+if [ "$operation" = flash ]; then
+    [ -n "$image" ] && [ -f "$image" ] || { echo "Programming image is unavailable." >&2; exit 2; }
+    case "$image" in
+        /data/app-data/fpga-flasher-webapp/uploads/*|/usr/share/fpga-flasher/artifacts/*) ;;
+        *) echo "Programming image is outside approved service storage." >&2; exit 2 ;;
+    esac
+    [ "$(wc -c < "$image" | tr -d ' ')" = "$FLASH_BYTES" ] || {
+        echo "Programming image does not match the qualified configuration range." >&2; exit 2;
+    }
+else
+    [ -z "$image" ] || usage
+fi
+
+[ -x "$XC3SPROG" ] && [ -x "$XPC2_LOADER" ] && [ -r "$XPC2_FIRMWARE" ] && [ -r "$BSCAN" ] || {
+    echo "Required XC3SPROG backend assets are unavailable." >&2; exit 2;
+}
+
+# VirtualBox can pass multiple identical cables through; do not guess which is
+# connected to the target.  Firmware loading happens only after this guard.
+adapter_count="$(lsusb -d 03fd:0013 2>/dev/null | wc -l | tr -d ' ')"
+[ "$adapter_count" = 1 ] || {
+    echo "Exactly one Xilinx Platform Cable USB adapter must be attached." >&2; exit 2;
+}
+
+"$XPC2_LOADER" --xpc-firmware="$XPC2_FIRMWARE"
+
+probe_output="$("$XC3SPROG" -c xpc2 -p 0 -I"$BSCAN" 2>&1)" || {
+    printf '%s\n' "$probe_output" >&2
+    echo "Target or configuration storage probe failed." >&2
+    exit 2
+}
+normalized_probe="$(printf '%s' "$probe_output" | tr 'A-F' 'a-f')"
+case "$normalized_probe" in
+    *"idcode: $EXPECTED_IDCODE"*) ;;
+    *) echo "Unexpected JTAG target." >&2; exit 2 ;;
+esac
+normalized_jedec="$(printf '%s' "$probe_output" | tr 'A-F' 'a-f' | tr -cd '0-9a-f')"
+case "$normalized_jedec" in
+    *"$EXPECTED_JEDEC"*) ;;
+    *) echo "Unexpected configuration storage." >&2; exit 2 ;;
+esac
+
+if [ "$operation" = probe ]; then
+    echo "Target and configuration storage probe passed."
+    exit 0
+fi
+
+flash_output="$("$XC3SPROG" -c xpc2 -I"$BSCAN" -p 0 "${image}:w:0:BIN" 2>&1)" || {
+    printf '%s\n' "$flash_output" >&2
+    echo "Programming failed." >&2
+    exit 2
+}
+printf '%s\n' "$flash_output"
+printf '%s' "$flash_output" | grep -q 'Verify: Success!' || {
+    echo "Programming completed without a positive verification result." >&2
+    exit 2
+}
+echo "Programming and verification passed."

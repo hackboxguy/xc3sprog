@@ -172,6 +172,17 @@ install(TARGETS detectchain DESTINATION bin)
 install(PROGRAMS "${CMAKE_SOURCE_DIR}/xc3sprog-xpc2.sh" DESTINATION bin)
 install(FILES "${CMAKE_SOURCE_DIR}/xusb_xp2.hex" DESTINATION bin)
 
+# This is deliberately separate from the interactive/reference wrappers.  It
+# accepts only the FPGA webapp's fixed operation contract and owns the target,
+# cable, BSCAN asset, IDCODE and JEDEC guards server-side.
+if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-xc3sprog-spartan7-backend.sh.in")
+    configure_file("${CMAKE_SOURCE_DIR}/fpga-xc3sprog-spartan7-backend.sh.in"
+                   "${CMAKE_BINARY_DIR}/fpga-xc3sprog-spartan7-backend.sh" @ONLY)
+    install(PROGRAMS "${CMAKE_BINARY_DIR}/fpga-xc3sprog-spartan7-backend.sh"
+            DESTINATION libexec/fpga-flasher
+            RENAME xc3sprog-spartan7)
+endif()
+
 # Install bscan_spi .bit files to share directory (following FHS)
 file(GLOB BSCAN_BIT_FILES "${CMAKE_SOURCE_DIR}/bscan_spi/*.bit")
 if(BSCAN_BIT_FILES)
