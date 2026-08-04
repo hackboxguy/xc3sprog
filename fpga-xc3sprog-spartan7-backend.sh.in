@@ -16,16 +16,18 @@ FLASH_CAPACITY_BYTES=16777216
 
 operation=""
 image=""
+output=""
 
 usage() {
-    echo "Usage: $0 --operation=probe|flash [--image=/absolute/path/image.bin]" >&2
+    echo "Usage: $0 --operation=probe|flash|backup [--image=/absolute/path/image.bin] [--output=/absolute/path/backup.bin]" >&2
     exit 2
 }
 
 for argument in "$@"; do
     case "$argument" in
-        --operation=probe|--operation=flash) operation="${argument#*=}" ;;
+        --operation=probe|--operation=flash|--operation=backup) operation="${argument#*=}" ;;
         --image=*) image="${argument#*=}" ;;
+        --output=*) output="${argument#*=}" ;;
         *) usage ;;
     esac
 done
@@ -33,6 +35,7 @@ done
 [ -n "$operation" ] || usage
 if [ "$operation" = flash ]; then
     [ -n "$image" ] && [ -f "$image" ] || { echo "Programming image is unavailable." >&2; exit 2; }
+    [ -z "$output" ] || usage
     case "$image" in
         /data/app-data/fpga-flasher-webapp/uploads/*|/usr/share/fpga-flasher/artifacts/*) ;;
         *) echo "Programming image is outside approved service storage." >&2; exit 2 ;;
@@ -44,8 +47,22 @@ if [ "$operation" = flash ]; then
     [ "$image_bytes" -gt 0 ] && [ "$image_bytes" -le "$FLASH_CAPACITY_BYTES" ] || {
         echo "Programming image exceeds configuration storage capacity." >&2; exit 2;
     }
+elif [ "$operation" = backup ]; then
+    [ -z "$image" ] && [ -n "$output" ] || usage
+    output_dir="$(dirname "$output")"
+    output_base="$(basename "$output")"
+    [ "$output_dir" = "/data/app-data/fpga-flasher-webapp/backups" ] && \
+        [ "$output_base" != "$output" ] || {
+        echo "Backup destination is outside protected service storage." >&2
+        exit 2
+    }
+    case "$output_base" in
+        .bkp_*.tmp) ;;
+        *) echo "Backup destination name is invalid." >&2; exit 2 ;;
+    esac
+    [ ! -e "$output" ] || { echo "Backup destination already exists." >&2; exit 2; }
 else
-    [ -z "$image" ] || usage
+    [ -z "$image" ] && [ -z "$output" ] || usage
 fi
 
 [ -x "$XC3SPROG" ] && [ -x "$XPC2_LOADER" ] && [ -r "$XPC2_FIRMWARE" ] && [ -r "$BSCAN" ] || {
@@ -88,6 +105,25 @@ esac
 
 if [ "$operation" = probe ]; then
     echo "Target and configuration storage probe passed."
+    exit 0
+fi
+
+if [ "$operation" = backup ]; then
+    umask 077
+    readback_output="$("$XC3SPROG" -c xpc2 -I"$BSCAN" -p 0 "${output}:R:0:BIN:${FLASH_CAPACITY_BYTES}" 2>&1)" || {
+        printf '%s\n' "$readback_output" >&2
+        rm -f "$output"
+        echo "Configuration storage readback failed." >&2
+        exit 2
+    }
+    output_bytes="$(wc -c < "$output" | tr -d ' ')"
+    [ "$output_bytes" = "$FLASH_CAPACITY_BYTES" ] || {
+        rm -f "$output"
+        echo "Configuration storage readback length is invalid." >&2
+        exit 2
+    }
+    printf '%s\n' "$readback_output"
+    echo "Configuration storage readback passed."
     exit 0
 fi
 
