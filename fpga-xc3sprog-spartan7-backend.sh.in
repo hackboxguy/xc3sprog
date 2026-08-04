@@ -61,17 +61,26 @@ adapter_count="$(lsusb -d 03fd:0013 2>/dev/null | wc -l | tr -d ' ')"
 
 "$XPC2_LOADER" --xpc-firmware="$XPC2_FIRMWARE"
 
-probe_output="$("$XC3SPROG" -c xpc2 -p 0 -I"$BSCAN" 2>&1)" || {
-    printf '%s\n' "$probe_output" >&2
-    echo "Target or configuration storage probe failed." >&2
+# BSCAN turns the FPGA into an SPI bridge, so its output reports the flash
+# JEDEC ID rather than the FPGA's JTAG IDCODE.  Verify the FPGA first, then
+# install BSCAN and verify the configuration storage separately.
+target_output="$("$XC3SPROG" -c xpc2 -p 0 2>&1)" || {
+    printf '%s\n' "$target_output" >&2
+    echo "JTAG target probe failed." >&2
     exit 2
 }
-normalized_probe="$(printf '%s' "$probe_output" | tr '[:upper:]' '[:lower:]')"
-case "$normalized_probe" in
+normalized_target="$(printf '%s' "$target_output" | tr '[:upper:]' '[:lower:]')"
+case "$normalized_target" in
     *"idcode: $EXPECTED_IDCODE"*) ;;
     *) echo "Unexpected JTAG target." >&2; exit 2 ;;
 esac
-normalized_jedec="$(printf '%s' "$probe_output" | tr '[:upper:]' '[:lower:]' | tr -cd '0-9a-f')"
+
+probe_output="$("$XC3SPROG" -c xpc2 -p 0 -I"$BSCAN" 2>&1)" || {
+    printf '%s\n' "$probe_output" >&2
+    echo "Configuration storage probe failed." >&2
+    exit 2
+}
+normalized_jedec="$(printf '%s' "$probe_output" | tr '[:upper:]' '[:lower:]' | sed 's/0x//g' | tr -cd '0-9a-f')"
 case "$normalized_jedec" in
     *"$EXPECTED_JEDEC"*) ;;
     *) echo "Unexpected configuration storage." >&2; exit 2 ;;
