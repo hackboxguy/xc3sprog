@@ -11,8 +11,10 @@
 #include "iofx2.h"
 #include "ioftdi.h"
 #include "ioxpc.h"
+#ifdef XC3SPROG_ENABLE_GPIOD
 #include "iogpiomatrixcreator.h"
 #include "iogpiomatrixvoice.h"
+#endif
 #include "utilities.h"
 
 extern char *optarg;
@@ -86,6 +88,7 @@ int  getIO( std::auto_ptr<IOBase> *io, struct cable_t * cable, char const *dev,
       io->get()->setVerbose(verbose);
       res = io->get()->Init(cable, serial, use_freq);
   }
+#ifdef XC3SPROG_ENABLE_GPIOD
   else if(cable->cabletype == CABLE_GPIOD_CREATOR)
   {
       io->reset(new IOGPIOMatrixCreator());
@@ -98,6 +101,13 @@ int  getIO( std::auto_ptr<IOBase> *io, struct cable_t * cable, char const *dev,
       io->get()->setVerbose(verbose);
       res = io->get()->Init(cable, serial, use_freq);
   }
+#else
+  else if(cable->cabletype == CABLE_GPIOD_CREATOR ||
+          cable->cabletype == CABLE_GPIOD_VOICE)
+  {
+      fprintf(stderr, "GPIO cable support was not built into this xc3sprog binary.\n");
+  }
+#endif
   else
   {
       fprintf(stderr, "Unknown Cable \"%s\" \n", getCableName(cable->cabletype));
@@ -184,4 +194,3 @@ std::vector<std::string> splitString(const std::string& s, char delim)
     }
   return res;
 }
-

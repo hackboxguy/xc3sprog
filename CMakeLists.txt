@@ -23,6 +23,15 @@ endif(${WIN32})
 option(USE_FTD2XX "Use FTDI libFTD2XX instead of free libftdi" ON)
 option(FPGA_FLASHER_RESTRICTED_ASSETS
        "Install only the reviewed FPGA-flasher backend assets" OFF)
+option(XC3SPROG_ENABLE_GPIOD
+       "Build libgpiod-based GPIO cable backends" ON)
+
+# The restricted appliance is USB-XPC-only.  Excluding the GPIO implementation
+# keeps that deployment independent of the host libgpiod ABI while normal
+# xc3sprog builds retain their existing GPIO support.
+if(FPGA_FLASHER_RESTRICTED_ASSETS)
+  set(XC3SPROG_ENABLE_GPIOD OFF)
+endif()
 
 find_package(libftdi)
 include_directories(${LIBFTDI_INCLUDE_DIR})
@@ -136,7 +145,13 @@ ADD_CUSTOM_COMMAND(OUTPUT cables.h
 
 INCLUDE_DIRECTORIES(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
 
-add_library(xc3sproglib  STATIC iogpiomatrixcreator.cpp iogpiomatrixvoice.cpp iogpiodpi.cpp ioftdi.cpp
+set(XC3SPROG_GPIOD_SOURCES)
+if(XC3SPROG_ENABLE_GPIOD)
+  list(APPEND XC3SPROG_GPIOD_SOURCES
+       iogpiomatrixcreator.cpp iogpiomatrixvoice.cpp iogpiodpi.cpp)
+endif()
+
+add_library(xc3sproglib  STATIC ${XC3SPROG_GPIOD_SOURCES} ioftdi.cpp
                         iofx2.cpp devicedb.cpp jtag.cpp jedecfile.cpp bitfile.cpp
                         iobase.cpp  progalgxc95x.cpp utilities.cpp
                         progalgxcf.cpp progalgxcfp.cpp progalgxc3s.cpp
@@ -146,7 +161,10 @@ add_library(xc3sproglib  STATIC iogpiomatrixcreator.cpp iogpiomatrixvoice.cpp io
                         ${CONDITIONAL_FILES} devices.h cables.h)
 
 
-set(GPIO_LIBS ${GPIO_LIBS} gpiod)
+if(XC3SPROG_ENABLE_GPIOD)
+  target_compile_definitions(xc3sproglib PRIVATE XC3SPROG_ENABLE_GPIOD=1)
+  set(GPIO_LIBS ${GPIO_LIBS} gpiod)
+endif()
 
 add_executable(xc2c_warp xc2c_warp.cpp)
 target_link_libraries(xc2c_warp xc3sproglib ${CONDITIONAL_LIBS} ${GPIO_LIBS})
