@@ -12,7 +12,7 @@ XPC2_FIRMWARE="@CMAKE_INSTALL_PREFIX@/bin/xusb_xp2.hex"
 BSCAN="@CMAKE_INSTALL_PREFIX@/share/xc3sprog/bscan_spi/xc7s50csga324-1.bit"
 EXPECTED_IDCODE="0x0362f093"
 EXPECTED_JEDEC="9d6018"
-FLASH_BYTES=16777216
+FLASH_CAPACITY_BYTES=16777216
 
 operation=""
 image=""
@@ -37,8 +37,12 @@ if [ "$operation" = flash ]; then
         /data/app-data/fpga-flasher-webapp/uploads/*|/usr/share/fpga-flasher/artifacts/*) ;;
         *) echo "Programming image is outside approved service storage." >&2; exit 2 ;;
     esac
-    [ "$(wc -c < "$image" | tr -d ' ')" = "$FLASH_BYTES" ] || {
-        echo "Programming image does not match the qualified configuration range." >&2; exit 2;
+    image_bytes="$(wc -c < "$image" | tr -d ' ')"
+    case "$image_bytes" in
+        ''|*[!0-9]*) echo "Programming image size is invalid." >&2; exit 2 ;;
+    esac
+    [ "$image_bytes" -gt 0 ] && [ "$image_bytes" -le "$FLASH_CAPACITY_BYTES" ] || {
+        echo "Programming image exceeds configuration storage capacity." >&2; exit 2;
     }
 else
     [ -z "$image" ] || usage
