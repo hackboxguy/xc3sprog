@@ -21,6 +21,8 @@ ENDIF( ${CMAKE_COMPILER_IS_GNUCXX} )
 endif(${WIN32})
 
 option(USE_FTD2XX "Use FTDI libFTD2XX instead of free libftdi" ON)
+option(FPGA_FLASHER_RESTRICTED_ASSETS
+       "Install only the reviewed FPGA-flasher backend assets" OFF)
 
 find_package(libftdi)
 include_directories(${LIBFTDI_INCLUDE_DIR})
@@ -183,26 +185,31 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-xc3sprog-spartan7-backend.sh.in")
             RENAME xc3sprog-spartan7)
 endif()
 
-# Install bscan_spi .bit files to share directory (following FHS)
-file(GLOB BSCAN_BIT_FILES "${CMAKE_SOURCE_DIR}/bscan_spi/*.bit")
-if(BSCAN_BIT_FILES)
-    install(FILES ${BSCAN_BIT_FILES} DESTINATION share/xc3sprog/bscan_spi)
-endif()
-
-# Optionally install compressed .bit files too
-file(GLOB BSCAN_BIT_GZ_FILES "${CMAKE_SOURCE_DIR}/bscan_spi/*.bit.gz")
-if(BSCAN_BIT_GZ_FILES)
-    install(FILES ${BSCAN_BIT_GZ_FILES} DESTINATION share/xc3sprog/bscan_spi)
-endif()
-
-# Install bscan_spi README for reference
-if(EXISTS "${CMAKE_SOURCE_DIR}/bscan_spi/README.txt")
-    install(FILES "${CMAKE_SOURCE_DIR}/bscan_spi/README.txt" 
+# A normal XC3SPROG installation retains its broad asset set.  The appliance
+# builds in restricted mode, where the service-facing backend can only load
+# the reviewed BSCAN-SPI asset for its one qualified target.
+if(FPGA_FLASHER_RESTRICTED_ASSETS)
+    install(FILES "${CMAKE_SOURCE_DIR}/bscan_spi/xc7s50csga324-1.bit"
             DESTINATION share/xc3sprog/bscan_spi)
+else()
+    file(GLOB BSCAN_BIT_FILES "${CMAKE_SOURCE_DIR}/bscan_spi/*.bit")
+    if(BSCAN_BIT_FILES)
+        install(FILES ${BSCAN_BIT_FILES} DESTINATION share/xc3sprog/bscan_spi)
+    endif()
+
+    file(GLOB BSCAN_BIT_GZ_FILES "${CMAKE_SOURCE_DIR}/bscan_spi/*.bit.gz")
+    if(BSCAN_BIT_GZ_FILES)
+        install(FILES ${BSCAN_BIT_GZ_FILES} DESTINATION share/xc3sprog/bscan_spi)
+    endif()
+
+    if(EXISTS "${CMAKE_SOURCE_DIR}/bscan_spi/README.txt")
+        install(FILES "${CMAKE_SOURCE_DIR}/bscan_spi/README.txt"
+                DESTINATION share/xc3sprog/bscan_spi)
+    endif()
 endif()
 
 # Install the fpga-jtag-flasher wrapper script
-if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher.sh.in")
+if(NOT FPGA_FLASHER_RESTRICTED_ASSETS AND EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher.sh.in")
     # Configure the script template with install paths
     configure_file("${CMAKE_SOURCE_DIR}/fpga-jtag-flasher.sh.in"
                    "${CMAKE_BINARY_DIR}/fpga-jtag-flasher.sh"
@@ -212,13 +219,13 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher.sh.in")
 endif()
 
 # Install fpga-jtag-flasher-wrapper.sh script
-if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-wrapper.sh")
+if(NOT FPGA_FLASHER_RESTRICTED_ASSETS AND EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-wrapper.sh")
     install(PROGRAMS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-wrapper.sh"
             DESTINATION bin)
 endif()
 
 # Install fpga-jtag-flasher-lattice.sh script
-if(EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-lattice.sh")
+if(NOT FPGA_FLASHER_RESTRICTED_ASSETS AND EXISTS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-lattice.sh")
     install(PROGRAMS "${CMAKE_SOURCE_DIR}/fpga-jtag-flasher-lattice.sh"
             DESTINATION bin)
 endif()
