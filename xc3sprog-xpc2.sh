@@ -150,13 +150,13 @@ if [ $NEED_FIRMWARE -eq 1 ]; then
     # Load firmware using fxload
     if [ $VERBOSE -eq 1 ]; then
         # Run with verbose output
-        if ! fxload -v -t fx2lp -I "$FIRMWARE" -D "$DEVICE_PATH"; then
+        if ! fxload load_ram --ihex-path "$FIRMWARE" --device "${BUS}.${DEV}" -t FX2LP; then
             echo "ERROR: Firmware loading failed" >&2
             exit 4
         fi
     else
         # Run quietly
-        if ! fxload -t fx2lp -I "$FIRMWARE" -D "$DEVICE_PATH" 2>/dev/null; then
+        if ! fxload load_ram --ihex-path "$FIRMWARE" --device "${BUS}.${DEV}" -t FX2LP 2>/dev/null; then
             echo "ERROR: Firmware loading failed" >&2
             exit 4
         fi
