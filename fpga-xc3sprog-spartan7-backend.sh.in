@@ -137,4 +137,5 @@ printf '%s' "$flash_output" | grep -q 'Verify: Success!' || {
     echo "Programming completed without a positive verification result." >&2
     exit 2
 }
+echo "FPGA-FLASHER:VERIFY-PASSED"
 echo "Programming and verification passed."
