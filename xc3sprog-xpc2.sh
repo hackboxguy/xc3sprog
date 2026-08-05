@@ -94,8 +94,17 @@ if ! command -v fxload >/dev/null 2>&1; then
     exit 3
 fi
 
-# Find the Xilinx Platform Cable USB II device
-DEVICE_LINE=$(lsusb | grep "${USB_VID}:${USB_PID}" | head -n 1)
+# Find exactly one Xilinx Platform Cable USB II device.  The pinned fxload
+# implementation selects devices by VID:PID (or bus.port), not by the
+# bus/device numbers printed by lsusb.
+DEVICE_COUNT=$(lsusb -d "${USB_VID}:${USB_PID}" 2>/dev/null | wc -l | tr -d '[:space:]')
+
+if [ "$DEVICE_COUNT" != "1" ]; then
+    echo "ERROR: expected exactly one Xilinx Platform Cable USB II (VID:PID ${USB_VID}:${USB_PID}), found ${DEVICE_COUNT}" >&2
+    exit 1
+fi
+
+DEVICE_LINE=$(lsusb -d "${USB_VID}:${USB_PID}")
 
 if [ -z "$DEVICE_LINE" ]; then
     echo "ERROR: Xilinx Platform Cable USB II not found (VID:PID ${USB_VID}:${USB_PID})" >&2
@@ -107,10 +116,12 @@ fi
 BUS=$(echo "$DEVICE_LINE" | sed -E 's/Bus ([0-9]+) Device ([0-9]+).*/\1/')
 DEV=$(echo "$DEVICE_LINE" | sed -E 's/Bus ([0-9]+) Device ([0-9]+).*/\2/')
 DEVICE_PATH="/dev/bus/usb/${BUS}/${DEV}"
+FXLOAD_SELECTOR="${USB_VID}:${USB_PID}"
 
 if [ $VERBOSE -eq 1 ]; then
     echo "Found device: Bus $BUS Device $DEV"
     echo "Device path: $DEVICE_PATH"
+    echo "fxload selector: $FXLOAD_SELECTOR"
 fi
 
 # Check if firmware is already loaded by examining USB descriptors
@@ -150,13 +161,13 @@ if [ $NEED_FIRMWARE -eq 1 ]; then
     # Load firmware using fxload
     if [ $VERBOSE -eq 1 ]; then
         # Run with verbose output
-        if ! fxload load_ram --ihex-path "$FIRMWARE" --device "${BUS}.${DEV}" -t FX2LP; then
+        if ! fxload load_ram --ihex-path "$FIRMWARE" --device "$FXLOAD_SELECTOR" -t FX2LP; then
             echo "ERROR: Firmware loading failed" >&2
             exit 4
         fi
     else
         # Run quietly
-        if ! fxload load_ram --ihex-path "$FIRMWARE" --device "${BUS}.${DEV}" -t FX2LP 2>/dev/null; then
+        if ! fxload load_ram --ihex-path "$FIRMWARE" --device "$FXLOAD_SELECTOR" -t FX2LP 2>/dev/null; then
             echo "ERROR: Firmware loading failed" >&2
             exit 4
         fi
