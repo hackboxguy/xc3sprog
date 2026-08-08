@@ -7,10 +7,20 @@
 
 # Configuration
 OPENFPGALOADER_PATH="/home/pi/micropanel/fpga/bin/openFPGALoader"
-CABLE="libgpiod"
-PINS="21:20:16:26"  # TDI:TDO:TCK:TMS
+GPIO_CABLE="libgpiod"
+GPIO_PINS="21:20:16:26"  # TDI:TDO:TCK:TMS
+USB_BLASTER_CABLE="usb-blaster"
+USB_BLASTER_VID="09fb"
+USB_BLASTER_PID="6001"
+USB_BLASTER_BOOT_VID="4348"   # CH552 bootloader: firmware not loaded
+USB_BLASTER_BOOT_PID="55e0"
 VERBOSE_LEVEL=""    # Default: quiet mode
 VERBOSE_MODE=0      # Flag for verbose output
+
+# Transport selection: auto (default), usb-blaster, or gpio
+FPGA_JTAG_TRANSPORT="${FPGA_JTAG_TRANSPORT:-auto}"
+TRANSPORT=""        # Resolved by select_transport()
+CABLE_ARGS=""       # openFPGALoader cable arguments for the resolved transport
 
 # USB stick configuration
 USB_MOUNT_POINT="/tmp/micropanel-usb"
@@ -28,6 +38,62 @@ print_error() {
 
 print_info() {
     printf "\033[1;33m[INFO]\033[0m %s\n" "$1" >&2
+}
+
+# Look up a USB device by vendor/product id via sysfs, so this works on
+# busybox targets where lsusb may be absent.
+usb_device_present() {
+    vid="$1"
+    pid="$2"
+
+    for dev in /sys/bus/usb/devices/*; do
+        [ -r "$dev/idVendor" ] || continue
+        [ -r "$dev/idProduct" ] || continue
+        if [ "$(cat "$dev/idVendor")" = "$vid" ] && [ "$(cat "$dev/idProduct")" = "$pid" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Choose the JTAG transport for this invocation. The USB-Blaster is preferred
+# whenever it is plugged in; otherwise the Pi GPIO bit-bang pins are used.
+select_transport() {
+    case "$FPGA_JTAG_TRANSPORT" in
+        gpio)
+            TRANSPORT="gpio"
+            ;;
+        usb-blaster)
+            if ! usb_device_present "$USB_BLASTER_VID" "$USB_BLASTER_PID"; then
+                print_error "FPGA_JTAG_TRANSPORT=usb-blaster but no USB-Blaster ($USB_BLASTER_VID:$USB_BLASTER_PID) is attached"
+                exit 1
+            fi
+            TRANSPORT="usb-blaster"
+            ;;
+        auto)
+            if usb_device_present "$USB_BLASTER_VID" "$USB_BLASTER_PID"; then
+                TRANSPORT="usb-blaster"
+            else
+                if usb_device_present "$USB_BLASTER_BOOT_VID" "$USB_BLASTER_BOOT_PID"; then
+                    print_error "USB-Blaster is in CH552 bootloader mode ($USB_BLASTER_BOOT_VID:$USB_BLASTER_BOOT_PID)"
+                    print_error "Its JTAG firmware is not loaded; falling back to GPIO"
+                fi
+                TRANSPORT="gpio"
+            fi
+            ;;
+        *)
+            print_error "Unknown FPGA_JTAG_TRANSPORT: $FPGA_JTAG_TRANSPORT (use auto, usb-blaster or gpio)"
+            exit 1
+            ;;
+    esac
+
+    if [ "$TRANSPORT" = "usb-blaster" ]; then
+        CABLE_ARGS="-c $USB_BLASTER_CABLE"
+        print_info "JTAG transport: USB-Blaster ($USB_BLASTER_VID:$USB_BLASTER_PID)"
+    else
+        CABLE_ARGS="-c $GPIO_CABLE --pins=$GPIO_PINS"
+        print_info "JTAG transport: Pi GPIO ($GPIO_CABLE, pins $GPIO_PINS)"
+    fi
 }
 
 # USB stick detection and mounting functions
@@ -265,10 +331,14 @@ get_jtag_info() {
     temp_file=$(mktemp)
     
     # Always use verbose mode for info detection to get all details
-    sudo $OPENFPGALOADER_PATH -c $CABLE --pins=$PINS --detect -f -v > "$temp_file" 2>&1
+    sudo $OPENFPGALOADER_PATH $CABLE_ARGS --detect -f -v > "$temp_file" 2>&1
     
     if [ $? -ne 0 ]; then
         print_error "Failed to detect FPGA via JTAG"
+        if grep -q "found 0 devices\|no device found" "$temp_file"; then
+            print_error "No device on the JTAG chain"
+            print_error "Check that the target board is powered on and the JTAG cable is seated"
+        fi
         if [ $VERBOSE_MODE -eq 1 ]; then
             cat "$temp_file"
         fi
@@ -307,7 +377,7 @@ get_jtag_info() {
     fi
     
     # Format and print result
-    print_success "IDCODE=$idcode : DEVICE=$device_name : FLASH=$flash_name : SPI-FLASH-JEDEC=$jedec_byte1$jedec_byte2 0x$jedec_byte3 0x$jedec_byte1"
+    print_success "IDCODE=$idcode : DEVICE=$device_name : FLASH=$flash_name : SPI-FLASH-JEDEC=$jedec_byte1$jedec_byte2 0x$jedec_byte3 0x$jedec_byte1 : CABLE=$TRANSPORT"
     
     rm -f "$temp_file"
 }
@@ -336,13 +406,13 @@ program_flash() {
             if [ $VERBOSE_MODE -eq 1 ]; then
                 print_info "Detected bitstream file (.bit)"
             fi
-            flash_cmd="sudo $OPENFPGALOADER_PATH -c $CABLE --pins=$PINS -f \"$file_path\" --verify $VERBOSE_LEVEL"
+            flash_cmd="sudo $OPENFPGALOADER_PATH $CABLE_ARGS -f \"$file_path\" --verify $VERBOSE_LEVEL"
             ;;
         "bin")
             if [ $VERBOSE_MODE -eq 1 ]; then
                 print_info "Detected binary file (.bin)"
             fi
-            flash_cmd="sudo $OPENFPGALOADER_PATH -c $CABLE --pins=$PINS -f \"$file_path\" --file-type bin --verify $VERBOSE_LEVEL"
+            flash_cmd="sudo $OPENFPGALOADER_PATH $CABLE_ARGS -f \"$file_path\" --file-type bin --verify $VERBOSE_LEVEL"
             ;;
         *)
             print_error "Unsupported file type: .$extension"
@@ -463,7 +533,7 @@ dump_flash() {
     temp_file=$(mktemp)
     
     # Execute dump command
-    sudo $OPENFPGALOADER_PATH -c $CABLE --pins=$PINS --dump-flash "$dump_path" --file-size $dump_size $VERBOSE_LEVEL > "$temp_file" 2>&1
+    sudo $OPENFPGALOADER_PATH $CABLE_ARGS --dump-flash "$dump_path" --file-size $dump_size $VERBOSE_LEVEL > "$temp_file" 2>&1
     result=$?
     
     if [ $result -eq 0 ]; then
@@ -532,23 +602,40 @@ show_usage() {
     echo "  4MB:    --size=4194304    (full IS25LP032D flash)"
     echo ""
     echo "Configuration:"
-    echo "  Cable: $CABLE"
-    echo "  Pins: $PINS (TDI:TDO:TCK:TMS)"
+    echo "  Transport: auto (USB-Blaster if attached, else Pi GPIO)"
+    echo "  USB-Blaster cable: $USB_BLASTER_CABLE ($USB_BLASTER_VID:$USB_BLASTER_PID)"
+    echo "  GPIO cable: $GPIO_CABLE, pins $GPIO_PINS (TDI:TDO:TCK:TMS)"
     echo "  Tool: $OPENFPGALOADER_PATH"
+    echo ""
+    echo "Environment:"
+    echo "  FPGA_JTAG_TRANSPORT=auto|usb-blaster|gpio   Override transport selection"
 }
 
 # Main script logic
 main() {
-    # Check if running as root or with sudo for GPIO access
-    if [ "$(id -u)" -ne 0 ]; then
-        print_error "This script requires root privileges for GPIO access"
-        print_info "Please run with sudo: sudo $0 $*"
+    # Answer --help before touching hardware or privileges
+    for arg in "$@"; do
+        case "$arg" in
+            "--help"|"-h"|"")
+                show_usage
+                exit 0
+                ;;
+        esac
+    done
+
+    # Every openFPGALoader call below is issued through sudo, so running as a
+    # normal user is fine as long as sudo is available.
+    if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+        print_error "This script requires root privileges for JTAG access, and sudo is not available"
         exit 1
     fi
-    
+
     # Check prerequisites
     check_openfpgaloader
-    
+
+    # Resolve USB-Blaster vs Pi GPIO before any JTAG operation
+    select_transport
+
     # Parse command line arguments
     dump_file=""
     dump_size=""

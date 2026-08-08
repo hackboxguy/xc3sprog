@@ -10,6 +10,8 @@ set -e  # Exit on any error
 XC3SPROG_BIN="@CMAKE_INSTALL_PREFIX@/bin/xc3sprog"
 BSCAN_PATH="@CMAKE_INSTALL_PREFIX@/share/xc3sprog/bscan_spi"
 XPC2_LOADER="@CMAKE_INSTALL_PREFIX@/bin/xc3sprog-xpc2.sh"
+OPENFPGALOADER_BIN="@CMAKE_INSTALL_PREFIX@/bin/openFPGALoader"
+SPIOVERJTAG_PATH="@CMAKE_INSTALL_PREFIX@/share/openFPGALoader"
 
 # Fallback to system paths if installed files not found
 if [ ! -x "$XC3SPROG_BIN" ]; then
@@ -24,10 +26,31 @@ if [ ! -x "$XPC2_LOADER" ]; then
     XPC2_LOADER="/usr/local/bin/xc3sprog-xpc2.sh"
 fi
 
+if [ ! -x "$OPENFPGALOADER_BIN" ]; then
+    OPENFPGALOADER_BIN="/usr/bin/openFPGALoader"
+fi
+
+if [ ! -d "$SPIOVERJTAG_PATH" ]; then
+    SPIOVERJTAG_PATH="/usr/share/openFPGALoader"
+fi
+
 DEFAULT_CABLE="gpiod_creator"
 DEFAULT_POSITION=0
 VERBOSE=0
 USE_SUDO=0  # Flag to determine if sudo is needed
+
+# USB-Blaster transport. xc3sprog cannot drive an Altera USB-Blaster at all, so
+# when one is attached the whole operation is handed to openFPGALoader using a
+# spiOverJtag bridge instead of an xc3sprog bscan bitstream.
+USB_BLASTER_CABLE="usb-blaster"
+USB_BLASTER_VID="09fb"
+USB_BLASTER_PID="6001"
+USB_BLASTER_BOOT_VID="4348"   # CH552 bootloader: firmware not loaded
+USB_BLASTER_BOOT_PID="55e0"
+
+# Transport selection: auto (default), usb-blaster, or gpio
+FPGA_JTAG_TRANSPORT="${FPGA_JTAG_TRANSPORT:-auto}"
+TRANSPORT=""  # Resolved by select_transport()
 
 # Helper function to conditionally use sudo
 # Handles: buildroot (root user), Pi OS (non-root), missing sudo
@@ -79,6 +102,128 @@ log_warning() {
 
 log_error() {
     printf "${RED}[ERROR]${NC} %s\n" "$1" >&2
+}
+
+# Look up a USB device by vendor/product id via sysfs, so this works on
+# busybox targets where lsusb may be absent.
+usb_device_present() {
+    vid="$1"
+    pid="$2"
+
+    for dev in /sys/bus/usb/devices/*; do
+        [ -r "$dev/idVendor" ] || continue
+        [ -r "$dev/idProduct" ] || continue
+        if [ "$(cat "$dev/idVendor")" = "$vid" ] && [ "$(cat "$dev/idProduct")" = "$pid" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Choose the JTAG transport for this invocation. The USB-Blaster is preferred
+# whenever it is plugged in; otherwise the existing xc3sprog GPIO path is used.
+select_transport() {
+    case "$FPGA_JTAG_TRANSPORT" in
+        gpio)
+            TRANSPORT="gpio"
+            ;;
+        usb-blaster)
+            if ! usb_device_present "$USB_BLASTER_VID" "$USB_BLASTER_PID"; then
+                log_error "FPGA_JTAG_TRANSPORT=usb-blaster but no USB-Blaster ($USB_BLASTER_VID:$USB_BLASTER_PID) is attached"
+                exit 1
+            fi
+            TRANSPORT="usb-blaster"
+            ;;
+        auto)
+            if usb_device_present "$USB_BLASTER_VID" "$USB_BLASTER_PID"; then
+                TRANSPORT="usb-blaster"
+            else
+                if usb_device_present "$USB_BLASTER_BOOT_VID" "$USB_BLASTER_BOOT_PID"; then
+                    log_error "USB-Blaster is in CH552 bootloader mode ($USB_BLASTER_BOOT_VID:$USB_BLASTER_BOOT_PID)"
+                    log_error "Its JTAG firmware is not loaded; falling back to GPIO"
+                fi
+                TRANSPORT="gpio"
+            fi
+            ;;
+        *)
+            log_error "Unknown FPGA_JTAG_TRANSPORT: $FPGA_JTAG_TRANSPORT (use auto, usb-blaster or gpio)"
+            exit 1
+            ;;
+    esac
+
+    if [ "$TRANSPORT" = "usb-blaster" ]; then
+        log_info "JTAG transport: USB-Blaster ($USB_BLASTER_VID:$USB_BLASTER_PID, via openFPGALoader)"
+    else
+        log_info "JTAG transport: Pi GPIO (via xc3sprog)"
+    fi
+}
+
+# openFPGALoader needs libusb access, which is not available unprivileged on the Pi
+run_ofl() {
+    if [ "$(id -u)" = "0" ]; then
+        "$OPENFPGALOADER_BIN" "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$OPENFPGALOADER_BIN" "$@"
+    else
+        "$OPENFPGALOADER_BIN" "$@"
+    fi
+}
+
+# openFPGALoader prints idcodes without leading zeros (0x362f093); xc3sprog pads
+# them (0x0362f093). Normalise to the padded lowercase form get_fpga_device uses.
+normalize_idcode() {
+    raw=$(echo "$1" | sed 's/^0[xX]//')
+    printf "0x%08s\n" "$raw" | tr ' ' '0' | tr '[:upper:]' '[:lower:]'
+}
+
+# Map a detected device to its spiOverJtag bridge. Only devices whose
+# USB-Blaster flow has actually been qualified are listed here; anything else
+# must not be programmed over the Blaster on a guess.
+find_spiover_bridge() {
+    local device="$1"
+    local bridge=""
+
+    case "$device" in
+        "XC7S50T"|"XC7S50") bridge="$SPIOVERJTAG_PATH/spiOverJtag_xc7s50.bit.gz" ;;
+        *)
+            log_error "Device $device has no qualified USB-Blaster flow"
+            log_error "Unplug the USB-Blaster to program this target over the Pi GPIO path"
+            return 1
+            ;;
+    esac
+
+    if [ ! -f "$bridge" ]; then
+        log_error "spiOverJtag bridge not found: $bridge"
+        return 1
+    fi
+
+    echo "$bridge"
+}
+
+# Detect the FPGA over the USB-Blaster and echo the normalised IDCODE.
+# Uses -v because openFPGALoader exits 0 on an empty JTAG chain and only
+# reports "found 0 devices" at that verbosity.
+ofl_detect_idcode() {
+    local output idcode
+
+    output=$(run_ofl -c "$USB_BLASTER_CABLE" --detect -v 2>&1) || true
+
+    idcode=$(echo "$output" | grep -o "idcode 0x[0-9a-fA-F]*" | awk '{print $2}' | head -1)
+
+    if [ -z "$idcode" ]; then
+        if echo "$output" | grep -q "found 0 devices"; then
+            log_error "No FPGA found on the JTAG chain over the USB-Blaster"
+            log_error "Check that the target board is powered on and the JTAG cable is seated"
+        else
+            log_error "Could not parse IDCODE from USB-Blaster detection"
+        fi
+        if [ $VERBOSE -eq 1 ]; then
+            echo "$output" >&2
+        fi
+        return 1
+    fi
+
+    normalize_idcode "$idcode"
 }
 
 # Detect USB stick device (dynamic detection of removable media)
@@ -317,6 +462,17 @@ FPGA JTAG Flash Programming Wrapper for xc3sprog
 Installation paths:
   xc3sprog: $XC3SPROG_BIN
   bscan files: $BSCAN_PATH
+  openFPGALoader: $OPENFPGALOADER_BIN
+  spiOverJtag bridges: $SPIOVERJTAG_PATH
+
+TRANSPORT:
+    An attached Altera USB-Blaster ($USB_BLASTER_VID:$USB_BLASTER_PID) is used
+    automatically, via openFPGALoader and a spiOverJtag bridge. With no Blaster
+    attached, the Pi GPIO path via xc3sprog is used instead. Passing --cable or
+    --xpc-firmware forces the xc3sprog path.
+
+    FPGA_JTAG_TRANSPORT=auto|usb-blaster|gpio overrides the choice.
+    Only XC7S50 (Spartan7-9090) has a qualified USB-Blaster flow.
 
 COMMANDS:
     --info                      Show FPGA and SPI flash information
@@ -379,8 +535,8 @@ get_fpga_device() {
         # Xilinx 7-Series FPGAs
         "0x0362f093") echo "XC7S50T" ;;
         "0x03632093"|"0x13632093") echo "XC7A75T" ;;
-        "0x0362D093") echo "XC7A35T" ;;
-        "0x0362C093") echo "XC7A50T" ;;
+        "0x0362D093"|"0x0362d093") echo "XC7A35T" ;;
+        "0x0362C093"|"0x0362c093") echo "XC7A50T" ;;
         # Xilinx 6-Series FPGAs
         "0x04250093") echo "XC6SLX16" ;;
         "0x04286093") echo "XC6SLX45" ;;
@@ -499,6 +655,48 @@ get_info() {
     local skip_bitstream="$4"
     
     log_info "Please Wait...reading jtag chain info"
+
+    if [ "$TRANSPORT" = "usb-blaster" ]; then
+        local idcode device bridge output flash_name
+
+        if ! idcode=$(ofl_detect_idcode); then
+            echo "Failed!!"
+            return 1
+        fi
+
+        device=$(get_fpga_device "$idcode")
+
+        if [ "$skip_bitstream" = "1" ]; then
+            log_info "Skipping spiOverJtag bridge and flash detection (--skipbitstream specified)"
+            log_success "IDCODE=$idcode : DEVICE=$device : FLASH=SKIPPED : CABLE=$USB_BLASTER_CABLE"
+            return 0
+        fi
+
+        if ! bridge=$(find_spiover_bridge "$device"); then
+            log_success "IDCODE=$idcode : DEVICE=$device : FLASH=NOT_DETECTED : CABLE=$USB_BLASTER_CABLE"
+            return 0
+        fi
+
+        log_info "Using spiOverJtag bridge: $bridge"
+
+        if ! output=$(run_ofl -c "$USB_BLASTER_CABLE" -B "$bridge" --detect -f 2>&1); then
+            log_warning "Flash detection failed, but FPGA was detected"
+            log_success "IDCODE=$idcode : DEVICE=$device : FLASH=DETECTION_FAILED : CABLE=$USB_BLASTER_CABLE"
+            return 0
+        fi
+
+        flash_name=$(echo "$output" | sed -n 's/.*Detected: //p' | awk '{print $1 " " $2}' | head -1)
+        local flash_jedec
+        flash_jedec=$(echo "$output" | grep "JEDEC ID:" | awk '{print $3}' | head -1)
+
+        if [ -n "$flash_name" ]; then
+            log_success "IDCODE=$idcode : DEVICE=$device : FLASH=$flash_name : SPI-FLASH-JEDEC=$flash_jedec : CABLE=$USB_BLASTER_CABLE"
+        else
+            log_warning "SPI flash not detected through spiOverJtag bridge"
+            log_success "IDCODE=$idcode : DEVICE=$device : FLASH=NOT_DETECTED : CABLE=$USB_BLASTER_CABLE"
+        fi
+        return 0
+    fi
 
     # Check if xc3sprog exists and is executable
     if [ ! -x "$XC3SPROG_BIN" ]; then
@@ -629,6 +827,73 @@ flash_bitstream() {
 
     # Use the resolved file (either from USB or internal)
     flash_file="$resolved_file"
+
+    if [ "$TRANSPORT" = "usb-blaster" ]; then
+        local idcode device bridge output
+
+        log_info "Starting flash programming..."
+        log_info "Flash file: $flash_file"
+        log_info "File size: $(du -h "$flash_file" | cut -f1)"
+
+        if ! idcode=$(ofl_detect_idcode); then
+            unmount_usb_stick
+            return 1
+        fi
+
+        device=$(get_fpga_device "$idcode")
+        log_info "Detected FPGA: $device ($idcode)"
+
+        if ! bridge=$(find_spiover_bridge "$device"); then
+            unmount_usb_stick
+            return 1
+        fi
+
+        log_info "Using spiOverJtag bridge: $bridge"
+
+        if [ "$dry_run" -eq 1 ]; then
+            log_info "DRY RUN: Would execute: $OPENFPGALOADER_BIN -c $USB_BLASTER_CABLE -B $bridge -f $flash_file --file-type bin --verify"
+            unmount_usb_stick
+            return 0
+        fi
+
+        log_info "Programming flash... This may take several minutes."
+        log_warning "Do NOT interrupt the process or power off the device!"
+
+        local start_time
+        start_time=$(date +%s)
+
+        if ! output=$(run_ofl -c "$USB_BLASTER_CABLE" -B "$bridge" \
+                -f "$flash_file" --file-type bin --verify 2>&1); then
+            log_error "Flash programming failed!"
+            log_error "Command output:"
+            echo "$output"
+            unmount_usb_stick
+            return 1
+        fi
+
+        local end_time duration
+        end_time=$(date +%s)
+        duration=$((end_time - start_time))
+
+        # openFPGALoader only prints this once the post-write readback has run,
+        # so its absence means the image was written but never verified.
+        if echo "$output" | grep -q "Verifying write"; then
+            log_success "Flash programming completed successfully!"
+            log_info "Programming time: ${duration}s"
+            unmount_usb_stick
+            return 0
+        fi
+
+        log_error "Flash programming may have failed - verification not found in output"
+        if [ $VERBOSE -eq 1 ]; then
+            log_error "Full output:"
+            echo "$output"
+        else
+            log_info "Run with --verbose for detailed output"
+        fi
+        unmount_usb_stick
+        return 1
+    fi
 
     # Check if xc3sprog exists and is executable
     if [ ! -x "$XC3SPROG_BIN" ]; then
@@ -774,6 +1039,56 @@ dump_flash() {
         log_info "File will be overwritten (using :R action)"
     fi
 
+    if [ "$TRANSPORT" = "usb-blaster" ]; then
+        local idcode device bridge
+
+        log_info "Starting flash dump operation..."
+        log_info "Output file: $dump_file"
+        log_info "Dump size: $dump_size bytes"
+
+        if ! idcode=$(ofl_detect_idcode); then
+            return 1
+        fi
+
+        device=$(get_fpga_device "$idcode")
+        log_info "Detected FPGA: $device ($idcode)"
+
+        if ! bridge=$(find_spiover_bridge "$device"); then
+            return 1
+        fi
+
+        log_info "Using spiOverJtag bridge: $bridge"
+
+        if [ "$dry_run" -eq 1 ]; then
+            log_info "[DRY RUN] Would execute: $OPENFPGALOADER_BIN -c $USB_BLASTER_CABLE -B $bridge --dump-flash $dump_file --file-size $dump_size"
+            return 0
+        fi
+
+        log_info "Reading flash memory (this may take several minutes)..."
+
+        if ! run_ofl -c "$USB_BLASTER_CABLE" -B "$bridge" \
+                --dump-flash "$dump_file" --file-size "$dump_size"; then
+            log_error "Flash dump failed"
+            return 1
+        fi
+
+        if [ ! -f "$dump_file" ]; then
+            log_error "Dump file was not created"
+            return 1
+        fi
+
+        local actual_size
+        actual_size=$(stat -c%s "$dump_file" 2>/dev/null || wc -c < "$dump_file")
+        if [ "$actual_size" -ne "$dump_size" ]; then
+            log_error "Dump size mismatch. Expected: $dump_size, Got: $actual_size"
+            return 1
+        fi
+
+        log_success "Flash dump completed successfully!"
+        log_info "Dumped $dump_size bytes to: $dump_file"
+        return 0
+    fi
+
     # Check if xc3sprog exists and is executable
     if [ ! -x "$XC3SPROG_BIN" ]; then
         log_error "xc3sprog not found at $XC3SPROG_BIN"
@@ -870,6 +1185,7 @@ main() {
     local skip_bitstream=0
     local dry_run=0
     local xpc_firmware=""
+    local cable_explicit=0
 
     # Parse command line arguments
     while [ $# -gt 0 ]; do
@@ -894,6 +1210,7 @@ main() {
                 ;;
             --cable=*)
                 cable="${1#*=}"
+                cable_explicit=1
                 shift
                 ;;
             --xpc-firmware=*)
@@ -944,6 +1261,14 @@ main() {
         show_usage
         exit 1
     fi
+
+    # Asking for a specific cable or for XPC firmware is an explicit request for
+    # the xc3sprog path, so it wins over an attached USB-Blaster.
+    if [ -n "$xpc_firmware" ] || [ "$cable_explicit" -eq 1 ]; then
+        FPGA_JTAG_TRANSPORT="gpio"
+    fi
+
+    select_transport
 
     # Load XPC2 firmware if specified
     if [ -n "$xpc_firmware" ]; then
